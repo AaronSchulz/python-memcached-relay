@@ -78,7 +78,11 @@ def relayCommand(mcSocket, message):
 	key = str(command['key']) # keys are always ASCII
 
 	if cmd == 'set' or cmd == 'add':
-		mcCommand = "%s %s %s %s %s\r\n%s\r\n" % (cmd,key,command['flg'],command['ttl'],len(command['val']),command['val'])
+		if 'sbt' in command and command['sbt']:
+			value = command['val'].replace('$UNIXTIME$', time.time())
+		else
+			value = command['val']
+		mcCommand = "%s %s %s %s %s\r\n%s\r\n" % (cmd,key,command['flg'],command['ttl'],len(value),value)
 	elif cmd == 'delete':
 		mcCommand = "delete %s\r\n" % key
 	else:
