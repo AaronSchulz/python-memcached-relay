@@ -48,8 +48,7 @@ def main():
 			# Sync from the reliable stream to the bulk of events
 			resyncViaRedisStream(mc_sock, rd_host, rd_handles, time.time(), config)
 			# Subscribe to channel to avoid polling overhead
-			print("Subscribing to channel %s on %s:%s" % (
-				config['redis_channel'],rd_host, config['redis_port']))
+			print("Subscribing to channel %s on %s" % (config['redis_channel'],rd_host))
 			rd_ps_handles[rd_host].subscribe(config['redis_channel'])
 			print("Subscribed")
 			# Quikly resync to avoid any stream gaps (replay a few things twice)
@@ -101,8 +100,7 @@ def periodicRedisPing(mc_sock, rd_host, rd_handles, rd_ps_handles, rd_fail_times
 		return
 	if (time.time() - rd_fail_times[rd_host]) >= config['retry_timeout']:
 		# Resubscribe before resync to avoid stream gaps
-		print("Re-subscribing to channel %s on %s:%s" % (
-			config['redis_channel'],rd_host, config['redis_port']))
+		print("Re-subscribing to channel %s on %s" % (config['redis_channel'],rd_host))
 		rd_ps_handles[rd_host].subscribe(config['redis_channel'])
 		del rd_fail_times[rd_host]
 		print("Subscribed")
@@ -123,7 +121,7 @@ def resyncViaRedisStream(mc_sock, rd_host, rd_handles, stopPos, config):
 	stopPos = stopPos + clockSkewFuzz
 
 	batchSize = 100
-	print("Starting from position %.6f; ending on %.6f" % (info['pos'],stopPos))
+	print("Covering position range [%.6f,%.6f]" % (info['pos'],stopPos))
 	# Replicate from the log in batches...
 	while True:
 		events = rd_handles[rd_host].zrangebyscore(
@@ -152,14 +150,13 @@ def relayMemcacheCommand(mc_sock, command):
 	key = str(command['key']) # keys are always ASCII
 
 	if cmd == 'set' or cmd == 'add':
+		value = command['val']
 		# Apply value substitutions if requested
 		if 'sbt' in command and command['sbt']:
-			value = command['val'].replace('$UNIXTIME$', '%.6f' % time.time())
-		else:
-			value = command['val']
+			value = value.replace('$UNIXTIME$', '%.6f' % time.time())
 
 		mcCommand = "%s %s %s %s %s\r\n%s\r\n" % (
-				cmd,key,command['flg'],command['ttl'],len(value),value)
+			cmd,key,command['flg'],command['ttl'],len(value),value)
 	elif cmd == 'delete':
 		mcCommand = "delete %s\r\n" % key
 	else:
@@ -196,7 +193,6 @@ def getCurrentPos(rd_host, config):
 		f.close()
 	except IOError as e:
 		info = {'pos': 0.0}
-		print("Position file not found or not available")
 	except ValueError as e:
 		info = {'pos': 0.0}
 		print("Position file is not valid JSON")
@@ -207,7 +203,7 @@ def setCurrentPos(rd_host, info, config):
 	log_path = os.path.join(
 		config['data_directory'], '%s:%s.pos' % (rd_host, config['redis_port']))
 
-	f = open(log_path,'w')
+	f = open(log_path, 'w')
 	f.write(json.dumps(info))
 	f.close()
 
