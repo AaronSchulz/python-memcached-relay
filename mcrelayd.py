@@ -146,21 +146,27 @@ def resyncViaRedisStream(mc_sock, rd_host, rd_handles, stopPos, config):
 	print("Done applying updates from redis server %s" % rd_host)
 
 def relayMemcacheCommand(mc_sock, command):
-	cmd = str(command['cmd']) # commands are always ASCII
-	key = str(command['key']) # keys are always ASCII
+	# Try to prevent bogus commands from crashing the daemon
+	try:
+		cmd = str(command['cmd']) # commands are always ASCII
+		key = str(command['key']) # keys are always ASCII
 
-	if cmd == 'set' or cmd == 'add':
-		value = command['val']
-		# Apply value substitutions if requested
-		if 'sbt' in command and command['sbt']:
-			value = value.replace('$UNIXTIME$', '%.6f' % time.time())
+		if cmd == 'set' or cmd == 'add':
+			value = command['val']
+			# Apply value substitutions if requested
+			if 'sbt' in command and command['sbt']:
+				value = value.replace('$UNIXTIME$', '%.6f' % time.time())
 
-		mcCommand = "%s %s %s %s %s\r\n%s\r\n" % (
-			cmd,key,command['flg'],command['ttl'],len(value),value)
-	elif cmd == 'delete':
-		mcCommand = "delete %s\r\n" % key
-	else:
-		raise Exception('BadMemcachedCommand', 'Got unrecognized command "%s"' % cmd)
+			mcCommand = "%s %s %s %s %s\r\n%s\r\n" % (
+				cmd,key,command['flg'],command['ttl'],len(value),value)
+		elif cmd == 'delete':
+			mcCommand = "delete %s\r\n" % key
+		else:
+			print('Got unrecognized memcached command "%s"' % cmd)
+			return None
+	except (KeyError,ValueError) as e:
+		print('Got incomplete or invalid relay command')
+		return None
 
 	print('Sending command: %s' % mcCommand)
 
