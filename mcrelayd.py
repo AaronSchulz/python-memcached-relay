@@ -34,7 +34,7 @@ def main():
 		target.connect((config['memcached_host'], config['memcached_port']))
 	elif config['cache_type'] == 'redis':
 		target = redis.StrictRedis(
-			host=config['redis_server'],
+			host=config['redis_host'],
 			port=config['redis_port'],
 			password=config['redis_password'],
 			socket_connect_timeout=2,
@@ -97,7 +97,7 @@ def main():
 						print("Cannot relay command; invalid JSON")
 						continue
 					# Replicate the update to the memcached/redis server
-					if isinstance(target,StrictRedis):
+					if config['cache_type'] == 'redis':
 						relayRedisCommand(target, command)
 					else:
 						relayMemcacheCommand(target, command)
@@ -164,7 +164,7 @@ def resyncViaRedisStream(target, rd_host, rd_handles, stopPos, config):
 				print("Cannot relay command; invalid JSON")
 				continue
 			# Replicate the update to the memcached/redis server
-			if isinstance(target,StrictRedis):
+			if config['cache_type'] == 'redis':
 				relayRedisCommand(target, command)
 			else:
 				relayMemcacheCommand(target, command)
@@ -187,7 +187,7 @@ def relayMemcacheCommand(mc_sock, command):
 			print('Got bad memcached key "%s" in command' % key)
 			return None
 
-		print("Got %s relay command to key %s" % (cmd,key))
+		print("Got '%s' relay command to key %s" % (cmd,key))
 
 		# Apply value substitutions if requested
 		if 'val' in command and 'sbt' in command and command['sbt']:
@@ -233,23 +233,24 @@ def relayRedisCommand(rd_handle, command):
 		cmd = str(command['cmd']) # commands are always ASCII
 		key = str(command['key']) # keys are always ASCII
 
-		print("Got %s relay command to key %s" % (cmd,key))
+		print("Got '%s' relay command to key %s" % (cmd,key))
 
 		# Apply value substitutions if requested
 		if 'val' in command and 'sbt' in command and command['sbt']:
 			command['val'] = command['val'].replace('$UNIXTIME$', '%.6f' % time.time())
 
-		if cmd == 'set' and command['ttl'] == 0:
-			return rd_handle.set(key, command['val'])
-		elif cmd == 'set':
-			return rd_handle.setex(key, command['ttl'], command['val'])
+		if cmd == 'set':
+			if command['ttl'] == 0:
+				return rd_handle.set(key, command['val'])
+			else:
+				return rd_handle.setex(key, command['ttl'], command['val'])
 		elif cmd == 'add':
 			if not rd_handle.exists(key):
 				if command['ttl'] == 0:
 					return rd_handle.set(key, command['val'])
-				else
+				else:
 					return rd_handle.setex(key, command['ttl'], command['val'])
-			else
+			else:
 				return False
 		elif cmd == 'incr':
 			return rd_handle.eval(incr_script, 1, key, command['val'])
