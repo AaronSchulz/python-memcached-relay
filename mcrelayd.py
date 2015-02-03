@@ -150,6 +150,9 @@ def relayMemcacheCommand(mc_sock, command):
 	try:
 		cmd = str(command['cmd']) # commands are always ASCII
 		key = str(command['key']) # keys are always ASCII
+		if ' ' in key:
+			print('Got bad memcached key "%s" in command' % key)
+			return None
 
 		if cmd == 'set' or cmd == 'add':
 			value = command['val']
@@ -159,6 +162,9 @@ def relayMemcacheCommand(mc_sock, command):
 
 			mcCommand = "%s %s %s %s %s\r\n%s\r\n" % (
 				cmd,key,command['flg'],command['ttl'],len(value),value)
+		elif cmd == 'incr' or cmd == 'decr':
+			value = long(command['val'])
+			mcCommand = "%s %s %s\r\n" % (cmd,key,value)
 		elif cmd == 'delete':
 			mcCommand = "delete %s\r\n" % key
 		else:
