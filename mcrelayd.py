@@ -190,7 +190,7 @@ def relayMemcacheCommand(mc_sock, command):
 		print("Got '%s' relay command to key %s" % (cmd,key))
 
 		# Apply value substitutions if requested
-		if 'val' in command and 'sbt' in command and command['sbt']:
+		if command.get('sbt', None):
 			command['val'] = command['val'].replace('$UNIXTIME$', '%.6f' % time.time())
 
 		if cmd == 'set' or cmd == 'add':
