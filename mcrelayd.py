@@ -283,11 +283,11 @@ def relay_cdn_command(http, command, config):
     try:
         cmd = str(command['cmd'])  # HTTP verbs are always ASCII
 
-        print("Got '%s' relay command to URL '%s'" % (cmd, command['url']))
+        print("Got '%s' relay command to URL '%s'" % (cmd, command['path']))
 
         headers = {'Host': command['host']}
         if cmd == 'PURGE':
-            url = config['cdn_url'] + '/' + command['path']
+            url = config['cdn_host'] + '/' + command['path']
             response, content = http.request(url, 'PURGE', headers=headers)
         else:
             print('Got unrecognized CDN command "%s"' % cmd)
