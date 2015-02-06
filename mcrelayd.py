@@ -270,7 +270,16 @@ def relayRedisCommand(rd_handle, command):
 
 def relayCdnCommand(conn, command):
 	try:
-		conn.request('PURGE', command['url'], '')
+		cmd = str(command['cmd']) # HTTP verbs are always ASCII
+
+		print("Got '%s' relay command to URL '%s'" % (cmd,command['url']))
+
+		if cmd == 'PURGE':
+			conn.request('PURGE', command['url'], '')
+		else:
+			print('Got unrecognized CDN command "%s"' % cmd)
+			return None
+
 		resp = conn.getresponse()
 	except (KeyError, ValueError) as e:
 		print('Got incomplete or invalid relay command')
