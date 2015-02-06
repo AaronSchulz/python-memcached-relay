@@ -105,7 +105,7 @@ def relayNextCommand(target, rd_host, last_pos_write, config):
 	redisStreamPing(target, rd_host, config)
 	# Process the next message if one is ready
 	event = rd_ps_handles[rd_host].get_message()
-	# @note: events are of the format <UNIX timetamp>:<JSON>
+	# @note: events are of the format <UNIX timestamp>:<JSON>
 	if event and event['type'] == 'message':
 		try:
 			eTime, eMsg = event['data'].split(":", 1)
@@ -156,7 +156,7 @@ def resyncViaRedisStream(target, rd_host, stopPos, config):
 	while True:
 		events = rd_handles[rd_host].zrangebyscore(
 			key, info['pos'], stopPos, start=0, num=batchSize)
-		# @note: events are of the format <UNIX timetamp>:<JSON>
+		# @note: events are of the format <UNIX timestamp>:<JSON>
 		for event in events:
 			try:
 				eTime, eMsg = event.split(":", 1)
