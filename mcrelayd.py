@@ -35,7 +35,7 @@ def main():
             host=rd_host,
             port=config['redis_stream_port'],
             password=config['redis_password'],
-            socket_connect_timeout=2,
+            socket_connect_timeout=1,
             socket_timeout=2)
         # Create the PubSub object (connection is deferred)
         rd_ps_handles[rd_host] = rd_handles[rd_host].pubsub()
@@ -93,7 +93,7 @@ def get_target_cache(config):
             host=config['redis_host'],
             port=config['redis_port'],
             password=config['redis_password'],
-            socket_connect_timeout=2,
+            socket_connect_timeout=1,
             socket_timeout=2)
         target.ping()
     elif config['cache_type'] == 'cdn':
