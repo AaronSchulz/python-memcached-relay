@@ -5,6 +5,7 @@ import socket
 import os
 import yaml
 import redis
+import httplib
 
 rd_handles = {} # map of (redis host => StrictRedis)
 rd_ps_handles = {} # map of (redis host => RedisPubSub)
@@ -21,7 +22,7 @@ def main():
 
 	# Connect to the memcached/redis cache server...
 	print("Connecting to local %s server..." % config['cache_type'])
-	target = getTargetCacheHandle(config) # either StrictRedis or Socket
+	target = getTargetCacheHandle(config) # one of (StrictRedis,Socket,HTTPConnection)
 	print("Connected")
 
 	last_pos_write = {} # map of (redis host => UNIX timestamp)
@@ -61,7 +62,7 @@ def main():
 		for rd_host in rd_ps_handles:
 			try:
 				# If a relay command is ready then run it on the cache
-				gotCmd = relayPubSubMessage(target, rd_host, last_pos_write, config)
+				gotCmd = relayNextMessage(target, rd_host, last_pos_write, config)
 				foundAny = gotCmd or foundAny
 			except redis.RedisError as e:
 				rd_fail_times[rd_host] = time.time()
@@ -92,12 +93,14 @@ def getTargetCacheHandle(config):
 			socket_connect_timeout=2,
 			socket_timeout=2)
 		target.ping()
+	elif config['cache_type'] == 'cdn':
+		target = httplib.HTTPConnection(config['cdn_url'])
 	else:
 		raise Exception('InvalidConfig', 'Invalid "cache_type" config')
 
 	return target
 
-def relayPubSubMessage(target, rd_host, last_pos_write, config):
+def relayNextMessage(target, rd_host, last_pos_write, config):
 	# Avoid down servers but re-connect periodically if possible
 	redisStreamPing(target, rd_host, config)
 	# Process the next message if one is ready
@@ -110,11 +113,8 @@ def relayPubSubMessage(target, rd_host, last_pos_write, config):
 		except ValueError as e:
 			print("Cannot relay command; invalid JSON")
 			return True
-		# Replicate the update to the memcached/redis server
-		if config['cache_type'] == 'redis':
-			relayRedisCommand(target, command)
-		else:
-			relayMemcacheCommand(target, command)
+		# Replicate the update to the cache server
+		relayCacheCommand(target, command, config)
 		# Periodically update the position file
 		cur_time = time.time();
 		if (cur_time - last_pos_write[rd_host]) > config['pos_write_delay']:
@@ -164,11 +164,8 @@ def resyncViaRedisStream(target, rd_host, stopPos, config):
 			except ValueError as e:
 				print("Cannot relay command; invalid JSON")
 				continue
-			# Replicate the update to the memcached/redis server
-			if config['cache_type'] == 'redis':
-				relayRedisCommand(target, command)
-			else:
-				relayMemcacheCommand(target, command)
+			# Replicate the update to the cache server
+			relayCacheCommand(target, command, config)
 			info['pos'] = float(eTime)
 		# Update the position after each batch
 		print("Updating position to %.6f" % info['pos'])
@@ -179,8 +176,17 @@ def resyncViaRedisStream(target, rd_host, stopPos, config):
 
 	print("Done applying updates from redis server %s" % rd_host)
 
+def relayCacheCommand(target, command, config):
+	if config['cache_type'] == 'memcached':
+		return relayMemcacheCommand(target, command)
+	elif config['cache_type'] == 'redis':
+		return relayRedisCommand(target, command)
+	elif config['cache_type'] == 'cdn':
+		return relayCdnCommand(target, command)
+
+	return None
+
 def relayMemcacheCommand(mc_sock, command):
-	# Try to prevent bogus commands from crashing the daemon
 	try:
 		cmd = str(command['cmd']) # commands are always ASCII
 		key = str(command['key']) # keys are always ASCII
@@ -227,7 +233,6 @@ def relayMemcacheCommand(mc_sock, command):
 	return result
 
 def relayRedisCommand(rd_handle, command):
-	# Try to prevent bogus commands from crashing the daemon
 	try:
 		cmd = str(command['cmd']) # commands are always ASCII
 		key = str(command['key']) # keys are always ASCII
@@ -262,6 +267,16 @@ def relayRedisCommand(rd_handle, command):
 		return None
 	except redis.RedisError as e:
 		raise Exception('RedisCommandError', 'Failed to issue redis command')
+
+def relayCdnCommand(conn, command):
+	try:
+		conn.request('PURGE', command['url'], '')
+		resp = conn.getresponse()
+	except (KeyError, ValueError) as e:
+		print('Got incomplete or invalid relay command')
+		return None
+
+	return resp.status
 
 def get_current_pos(rd_host, config):
 	try:
