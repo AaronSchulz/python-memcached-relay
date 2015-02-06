@@ -62,7 +62,7 @@ def main():
 		for rd_host in rd_ps_handles:
 			try:
 				# If a relay command is ready then run it on the cache
-				gotCmd = relayNextMessage(target, rd_host, last_pos_write, config)
+				gotCmd = relayNextCommand(target, rd_host, last_pos_write, config)
 				foundAny = gotCmd or foundAny
 			except redis.RedisError as e:
 				rd_fail_times[rd_host] = time.time()
@@ -100,7 +100,7 @@ def getTargetCacheHandle(config):
 
 	return target
 
-def relayNextMessage(target, rd_host, last_pos_write, config):
+def relayNextCommand(target, rd_host, last_pos_write, config):
 	# Avoid down servers but re-connect periodically if possible
 	redisStreamPing(target, rd_host, config)
 	# Process the next message if one is ready
@@ -119,7 +119,7 @@ def relayNextMessage(target, rd_host, last_pos_write, config):
 		cur_time = time.time();
 		if (cur_time - last_pos_write[rd_host]) > config['pos_write_delay']:
 			info = {'pos': float(eTime)}
-			set_current_pos(rd_host, info, config)
+			setCurrentPosition(rd_host, info, config)
 			last_pos_write[rd_host] = cur_time
 		return True
 	else:
@@ -144,7 +144,7 @@ def resyncViaRedisStream(target, rd_host, stopPos, config):
 	print("Applying updates from redis server %s" % rd_host);
 
 	# Get the current position time
-	info = get_current_pos(rd_host, config)
+	info = getCurrentPosition(rd_host, config)
 	# Adjust time range to handle any clock skew
 	clockSkewFuzz = 5
 	info['pos'] = max(0, info['pos'] - clockSkewFuzz)
@@ -169,7 +169,7 @@ def resyncViaRedisStream(target, rd_host, stopPos, config):
 			info['pos'] = float(eTime)
 		# Update the position after each batch
 		print("Updating position to %.6f" % info['pos'])
-		set_current_pos(rd_host, info, config)
+		setCurrentPosition(rd_host, info, config)
 		# Stop when there are no batches left
 		if len(events) < batchSize:
 			break
@@ -287,9 +287,9 @@ def relayCdnCommand(conn, command):
 
 	return resp.status
 
-def get_current_pos(rd_host, config):
+def getCurrentPosition(rd_host, config):
 	try:
-		f = open(get_pos_path(rd_host, config))
+		f = open(getPosFilePath(rd_host, config))
 		info = json.load(f)
 		f.close()
 	except IOError as e:
@@ -300,12 +300,12 @@ def get_current_pos(rd_host, config):
 
 	return info
 
-def set_current_pos(rd_host, info, config):
-	f = open(get_pos_path(rd_host, config), 'w')
+def setCurrentPosition(rd_host, info, config):
+	f = open(getPosFilePath(rd_host, config), 'w')
 	f.write(json.dumps(info))
 	f.close()
 
-def get_pos_path(rd_host, config):
+def getPosFilePath(rd_host, config):
 	return os.path.join(config['data_directory'],
 		'%s:%s.pos' % (rd_host, config['redis_stream_port']))
 
