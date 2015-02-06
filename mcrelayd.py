@@ -147,7 +147,7 @@ def resync_via_redis_stream(target, rd_host, stop_pos, config):
     # Prefix the channel to get the stream key
     key = "z-stream:%s" % config['redis_channel']
 
-    print("Applying updates from redis server %s" % rd_host);
+    print("Applying updates from redis server %s" % rd_host)
 
     # Get the current position time
     info = get_current_position(rd_host, config)
@@ -210,9 +210,8 @@ def relay_memcache_command(mc_sock, command, config):
             command['val'] = command['val'].replace('$UNIXTIME$', '%.6f' % purge_time)
 
         if cmd == 'set' or cmd == 'add':
-            cmd_buffer = "%s %s %s %s %s\r\n%s\r\n" % (cmd, key,
-                                                      command['flg'], command['ttl'], len(command['val']),
-                                                      command['val'])
+            cmd_buffer = "%s %s %s %s %s\r\n%s\r\n" % (
+                cmd, key, command['flg'], command['ttl'], len(command['val']), command['val'])
         elif cmd == 'delete':
             cmd_buffer = "delete %s\r\n" % key
         else:
