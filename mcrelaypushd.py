@@ -71,8 +71,6 @@ def enqueue_command(channel):
     if not isinstance(request.json.events, list):
         abort(400)
 
-    channel = str(config['channel'])  # channel is ASCII
-
     # Randomize the servers used
     host_candidates = env.rd_handles.keys()
     random.shuffle(host_candidates)
