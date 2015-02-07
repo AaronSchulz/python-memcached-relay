@@ -7,13 +7,14 @@ import yaml
 import redis
 import httplib2
 
-rd_handles = {}  # map of (redis host => StrictRedis)
-rd_ps_handles = {}  # map of (redis host => RedisPubSub)
-rd_fail_times = {}  # map of (redis host => UNIX timestamp)
+env = {}  # global state
+env.rd_handles = {}  # map of (redis host => StrictRedis)
+env.rd_ps_handles = {}  # map of (redis host => RedisPubSub)
+env.rd_fail_times = {}  # map of (redis host => UNIX timestamp)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Process memcached commands from a channel')
+    parser = argparse.ArgumentParser(description='Process cache relay commands from a channel')
     parser.add_argument('--config-file', required=True, help='YAML configuration file')
     args = parser.parse_args()
 
@@ -31,26 +32,26 @@ def main():
     # Connect to all the redis PubSub servers...
     for rd_host in config['redis_stream_hosts']:
         # Construct the redis handle (connection is deferred)
-        rd_handles[rd_host] = redis.StrictRedis(
+        env.rd_handles[rd_host] = redis.StrictRedis(
             host=rd_host,
             port=config['redis_stream_port'],
             password=config['redis_password'],
             socket_connect_timeout=1,
             socket_timeout=2)
         # Create the PubSub object (connection is deferred)
-        rd_ps_handles[rd_host] = rd_handles[rd_host].pubsub()
+        env.rd_ps_handles[rd_host] = env.rd_handles[rd_host].pubsub()
         # Actually connect and subscribe (connection is on first command)
         try:
             # Sync from the reliable stream to the bulk of events
             resync_via_redis_stream(target, rd_host, time.time(), config)
             # Subscribe to channel to avoid polling overhead
             print("Subscribing to channel %s on %s..." % (config['redis_channel'], rd_host))
-            rd_ps_handles[rd_host].subscribe(config['redis_channel'])
+            env.rd_ps_handles[rd_host].subscribe(config['redis_channel'])
             print("Subscribed")
             # Quickly resync to avoid any stream gaps (replay a few things twice)
             resync_via_redis_stream(target, rd_host, time.time(), config)
         except redis.RedisError as e:
-            rd_fail_times[rd_host] = time.time()
+            env.rd_fail_times[rd_host] = time.time()
             print("Error contacting redis server %s" % rd_host)
         # Track the last time the position file was updated for this server
         last_pos_write[rd_host] = time.time()
@@ -60,13 +61,13 @@ def main():
     while True:
         found_any = False
         # Iterate through each host serving the channel
-        for rd_host in rd_ps_handles:
+        for rd_host in env.rd_ps_handles:
             try:
                 # If a relay command is ready then run it on the cache
                 got_cmd = relay_next_command(target, rd_host, last_pos_write, config)
                 found_any = got_cmd or found_any
             except redis.RedisError as e:
-                rd_fail_times[rd_host] = time.time()
+                env.rd_fail_times[rd_host] = time.time()
                 print("Error contacting redis server %s" % rd_host)
         # Avoid high CPU usage when no commands were found
         if not found_any:
@@ -108,7 +109,7 @@ def relay_next_command(target, rd_host, last_pos_write, config):
     # Avoid down servers but re-connect periodically if possible
     redis_stream_ping(target, rd_host, config)
     # Process the next message if one is ready
-    event = rd_ps_handles[rd_host].get_message()
+    event = env.rd_ps_handles[rd_host].get_message()
     # @note: events are of the format <UNIX timestamp>:<JSON>
     if event and event['type'] == 'message':
         try:
@@ -131,13 +132,13 @@ def relay_next_command(target, rd_host, last_pos_write, config):
 
 
 def redis_stream_ping(target, rd_host, config):
-    if rd_host not in rd_fail_times:
+    if rd_host not in env.rd_fail_times:
         return
-    if (time.time() - rd_fail_times[rd_host]) >= config['retry_timeout']:
+    if (time.time() - env.rd_fail_times[rd_host]) >= config['retry_timeout']:
         # Resubscribe before resync to avoid stream gaps
         print("Re-subscribing to channel %s on %s" % (config['redis_channel'], rd_host))
-        rd_ps_handles[rd_host].subscribe(config['redis_channel'])
-        del rd_fail_times[rd_host]
+        env.rd_ps_handles[rd_host].subscribe(config['redis_channel'])
+        del env.rd_fail_times[rd_host]
         print("Subscribed")
         # Resync from the reliable stream (replay a few things twice)
         resync_via_redis_stream(target, rd_host, time.time(), config)
@@ -160,7 +161,7 @@ def resync_via_redis_stream(target, rd_host, stop_pos, config):
     print("Covering position range [%.6f,%.6f]" % (info['pos'], stop_pos))
     # Replicate from the log in batches...
     while True:
-        events = rd_handles[rd_host].zrangebyscore(
+        events = env.rd_handles[rd_host].zrangebyscore(
             key, info['pos'], stop_pos, start=0, num=batch_size)
         # @note: events are of the format <UNIX timestamp>:<JSON>
         for event in events:
