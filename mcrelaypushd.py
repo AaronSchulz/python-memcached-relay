@@ -1,6 +1,7 @@
 #!flask/bin/python
 from flask import Flask
 
+import argparse
 import time
 import random
 import json
@@ -46,8 +47,8 @@ def setup():
             host=rd_host,
             port=env.config['redis_stream_port'],
             password=env.config['redis_password'],
-            socket_connect_timeout=1,
-            socket_timeout=2)
+            socket_connect_timeout=env.config['redis_connect_timeout'],
+            socket_timeout=env.config['socket_timeout'])
         env.rd_enqueue_handle[rd_host] = env.rd_handles[rd_host].register_script(enqueue_script)
 
 
@@ -57,6 +58,8 @@ def load_config(config_file):
     f.close()
 
     config['event_ttl'] = 86400
+    config['redis_connect_timeout'] = 1
+    config['redis_timeout'] = 1
 
     return config
 

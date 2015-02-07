@@ -9,6 +9,7 @@ import redis
 import httplib2
 
 env = {}  # global state
+env.config = {}
 env.rd_handles = {}  # map of (redis host => StrictRedis)
 env.rd_ps_handles = {}  # map of (redis host => RedisPubSub)
 env.rd_fail_times = {}  # map of (redis host => UNIX timestamp)
@@ -20,37 +21,37 @@ def main():
     args = parser.parse_args()
 
     print("Loading YAML config...")
-    config = load_config(args.config_file)
+    env.config = load_config(args.config_file)
     print("Done")
 
     # Connect to the memcached/redis cache server...
-    print("Connecting to local %s server..." % config['cache_type'])
-    target = get_target_cache(config)  # one of (StrictRedis,Socket,Http)
+    print("Connecting to local %s server..." % env.config['cache_type'])
+    target = get_target_cache()  # one of (StrictRedis,Socket,Http)
     print("Connected")
 
     last_pos_write = {}  # map of (redis host => UNIX timestamp)
 
     # Connect to all the redis PubSub servers...
-    for rd_host in config['redis_stream_hosts']:
+    for rd_host in env.config['redis_stream_hosts']:
         # Construct the redis handle (connection is deferred)
         env.rd_handles[rd_host] = redis.StrictRedis(
             host=rd_host,
-            port=config['redis_stream_port'],
-            password=config['redis_password'],
-            socket_connect_timeout=1,
-            socket_timeout=2)
+            port=env.config['redis_stream_port'],
+            password=env.config['redis_password'],
+            socket_connect_timeout=env.config['redis_connect_timeout'],
+            socket_timeout=env.config['socket_timeout'])
         # Create the PubSub object (connection is deferred)
         env.rd_ps_handles[rd_host] = env.rd_handles[rd_host].pubsub()
         # Actually connect and subscribe (connection is on first command)
         try:
             # Sync from the reliable stream to the bulk of events
-            resync_via_redis_stream(target, rd_host, time.time(), config)
+            resync_via_redis_stream(target, rd_host, time.time())
             # Subscribe to channel to avoid polling overhead
-            print("Subscribing to channel %s on %s..." % (config['redis_channel'], rd_host))
-            env.rd_ps_handles[rd_host].subscribe(config['redis_channel'])
+            print("Subscribing to channel %s on %s..." % (env.config['redis_channel'], rd_host))
+            env.rd_ps_handles[rd_host].subscribe(env.config['redis_channel'])
             print("Subscribed")
             # Quickly resync to avoid any stream gaps (replay a few things twice)
-            resync_via_redis_stream(target, rd_host, time.time(), config)
+            resync_via_redis_stream(target, rd_host, time.time())
         except redis.RedisError as e:
             env.rd_fail_times[rd_host] = time.time()
             print("Error contacting redis server %s" % rd_host)
@@ -65,7 +66,7 @@ def main():
         for rd_host in env.rd_ps_handles:
             try:
                 # If a relay command is ready then run it on the cache
-                got_cmd = relay_next_command(target, rd_host, last_pos_write, config)
+                got_cmd = relay_next_command(target, rd_host, last_pos_write)
                 found_any = got_cmd or found_any
             except redis.RedisError as e:
                 env.rd_fail_times[rd_host] = time.time()
@@ -82,23 +83,25 @@ def load_config(config_file):
 
     config['retry_timeout'] = 5  # time to treat servers as down
     config['pos_write_delay'] = 1  # write positions this often
+    config['redis_connect_timeout'] = 1
+    config['redis_timeout'] = 1
 
     return config
 
 
-def get_target_cache(config):
-    if config['cache_type'] == 'memcached':
+def get_target_cache():
+    if env.config['cache_type'] == 'memcached':
         target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        target.connect((config['memcached_host'], config['memcached_port']))
-    elif config['cache_type'] == 'redis':
+        target.connect((env.config['memcached_host'], env.config['memcached_port']))
+    elif env.config['cache_type'] == 'redis':
         target = redis.StrictRedis(
-            host=config['redis_host'],
-            port=config['redis_port'],
-            password=config['redis_password'],
-            socket_connect_timeout=1,
-            socket_timeout=2)
+            host=env.config['redis_host'],
+            port=env.config['redis_port'],
+            password=env.config['redis_password'],
+            socket_connect_timeout=env.config['redis_connect_timeout'],
+            socket_timeout=env.config['redis_timeout'])
         target.ping()
-    elif config['cache_type'] == 'cdn':
+    elif env.config['cache_type'] == 'cdn':
         target = httplib2.Http()
     else:
         raise Exception('InvalidConfig', 'Invalid "cache_type" config')
@@ -106,9 +109,9 @@ def get_target_cache(config):
     return target
 
 
-def relay_next_command(target, rd_host, last_pos_write, config):
+def relay_next_command(target, rd_host, last_pos_write):
     # Avoid down servers but re-connect periodically if possible
-    redis_stream_ping(target, rd_host, config)
+    redis_stream_ping(target, rd_host)
     # Process the next message if one is ready
     event = env.rd_ps_handles[rd_host].get_message()
     # @note: events are of the format <UNIX timestamp>:<JSON>
@@ -120,39 +123,39 @@ def relay_next_command(target, rd_host, last_pos_write, config):
             print("Cannot relay command; invalid JSON")
             return True
         # Replicate the update to the cache server
-        relay_cache_command(target, command, config)
+        relay_cache_command(target, command)
         # Periodically update the position file
         cur_time = time.time()
-        if (cur_time - last_pos_write[rd_host]) > config['pos_write_delay']:
+        if (cur_time - last_pos_write[rd_host]) > env.config['pos_write_delay']:
             info = {'pos': float(e_time)}
-            set_current_position(rd_host, info, config)
+            set_current_position(rd_host, info)
             last_pos_write[rd_host] = cur_time
         return True
     else:
         return False
 
 
-def redis_stream_ping(target, rd_host, config):
+def redis_stream_ping(target, rd_host):
     if rd_host not in env.rd_fail_times:
         return
-    if (time.time() - env.rd_fail_times[rd_host]) >= config['retry_timeout']:
+    if (time.time() - env.rd_fail_times[rd_host]) >= env.config['retry_timeout']:
         # Resubscribe before resync to avoid stream gaps
-        print("Re-subscribing to channel %s on %s" % (config['redis_channel'], rd_host))
-        env.rd_ps_handles[rd_host].subscribe(config['redis_channel'])
+        print("Re-subscribing to channel %s on %s" % (env.config['redis_channel'], rd_host))
+        env.rd_ps_handles[rd_host].subscribe(env.config['redis_channel'])
         del env.rd_fail_times[rd_host]
         print("Subscribed")
         # Resync from the reliable stream (replay a few things twice)
-        resync_via_redis_stream(target, rd_host, time.time(), config)
+        resync_via_redis_stream(target, rd_host, time.time())
 
 
-def resync_via_redis_stream(target, rd_host, stop_pos, config):
+def resync_via_redis_stream(target, rd_host, stop_pos):
     # Prefix the channel to get the stream key
-    key = "z-stream:%s" % config['redis_channel']
+    key = "z-stream:%s" % env.config['redis_channel']
 
     print("Applying updates from redis server %s" % rd_host)
 
     # Get the current position time
-    info = get_current_position(rd_host, config)
+    info = get_current_position(rd_host)
     # Adjust time range to handle any clock skew
     clock_skew_fuzz = 5
     info['pos'] = max(0, info['pos'] - clock_skew_fuzz)
@@ -173,11 +176,11 @@ def resync_via_redis_stream(target, rd_host, stop_pos, config):
                 print("Cannot relay command; invalid JSON")
                 continue
             # Replicate the update to the cache server
-            relay_cache_command(target, command, config)
+            relay_cache_command(target, command)
             info['pos'] = float(e_time)
         # Update the position after each batch
         print("Updating position to %.6f" % info['pos'])
-        set_current_position(rd_host, info, config)
+        set_current_position(rd_host, info)
         # Stop when there are no batches left
         if len(events) < batch_size:
             break
@@ -185,18 +188,18 @@ def resync_via_redis_stream(target, rd_host, stop_pos, config):
     print("Done applying updates from redis server %s" % rd_host)
 
 
-def relay_cache_command(target, command, config):
-    if config['cache_type'] == 'memcached':
-        return relay_memcache_command(target, command, config)
-    elif config['cache_type'] == 'redis':
-        return relay_redis_command(target, command, config)
-    elif config['cache_type'] == 'cdn':
-        return relay_cdn_command(target, command, config)
+def relay_cache_command(target, command):
+    if env.config['cache_type'] == 'memcached':
+        return relay_memcache_command(target, command)
+    elif env.config['cache_type'] == 'redis':
+        return relay_redis_command(target, command)
+    elif env.config['cache_type'] == 'cdn':
+        return relay_cdn_command(target, command)
 
     return None
 
 
-def relay_memcache_command(mc_sock, command, config):
+def relay_memcache_command(mc_sock, command):
     try:
         cmd = str(command['cmd'])  # commands are always ASCII
         key = str(command['key'])  # keys are always ASCII
@@ -243,7 +246,7 @@ def relay_memcache_command(mc_sock, command, config):
     return result
 
 
-def relay_redis_command(rd_handle, command, config):
+def relay_redis_command(rd_handle, command):
     try:
         cmd = str(command['cmd'])  # commands are always ASCII
         key = str(command['key'])  # keys are always ASCII
@@ -280,7 +283,7 @@ def relay_redis_command(rd_handle, command, config):
         raise Exception('RedisCommandError', 'Failed to issue redis command')
 
 
-def relay_cdn_command(http, command, config):
+def relay_cdn_command(http, command):
     try:
         cmd = str(command['cmd'])  # HTTP verbs are always ASCII
 
@@ -288,7 +291,7 @@ def relay_cdn_command(http, command, config):
 
         headers = {'Host': command['host']}
         if cmd == 'PURGE':
-            url = config['cdn_host'] + '/' + command['path']
+            url = env.config['cdn_host'] + '/' + command['path']
             response, content = http.request(url, 'PURGE', headers=headers)
         else:
             print('Got unrecognized CDN command "%s"' % cmd)
@@ -300,9 +303,9 @@ def relay_cdn_command(http, command, config):
     return response.status
 
 
-def get_current_position(rd_host, config):
+def get_current_position(rd_host):
     try:
-        f = open(get_position_path(rd_host, config))
+        f = open(get_position_path(rd_host))
         info = json.load(f)
         f.close()
     except IOError as e:
@@ -314,15 +317,15 @@ def get_current_position(rd_host, config):
     return info
 
 
-def set_current_position(rd_host, info, config):
-    f = open(get_position_path(rd_host, config), 'w')
+def set_current_position(rd_host, info):
+    f = open(get_position_path(rd_host), 'w')
     f.write(json.dumps(info))
     f.close()
 
 
-def get_position_path(rd_host, config):
-    return os.path.join(config['data_directory'],
-                        '%s:%s.pos' % (rd_host, config['redis_stream_port']))
+def get_position_path(rd_host):
+    return os.path.join(env.config['data_directory'],
+                        '%s:%s.pos' % (rd_host, env.config['redis_stream_port']))
 
 
 if __name__ == '__main__':
