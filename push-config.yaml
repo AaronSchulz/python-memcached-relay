@@ -1,9 +1,4 @@
-cache_type : "redis"
-redis_host: "127.0.0.1"
-redis_port: 6379
 redis_stream_hosts:
  - "127.0.0.1"
 redis_stream_port: 6379
 redis_password: null
-redis_channel: "myapp-redis-main:purge"
-data_directory: /var/cache/python-mc-relay
