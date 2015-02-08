@@ -30,6 +30,7 @@ end
 return pushed"""
 
 env = {}  # global state
+env.rd_fail_times = {}  # map of (redis host => UNIX timestamp)
 
 
 def setup():
@@ -58,6 +59,7 @@ def load_config(config_file):
     f.close()
 
     config['event_ttl'] = 86400
+    config['retry_timeout'] = 5  # time to treat servers as down
     config['redis_connect_timeout'] = 1
     config['redis_timeout'] = 1
 
@@ -78,15 +80,21 @@ def enqueue_command(channel):
     # Get the messages pushed into a random redis server...
     published = 0
     for rd_host in host_candidates:
+        # Avoid down servers but re-connect periodically if possible
+        if (time.time() - env.rd_fail_times.get(rd_host, 0)) < env.config['retry_timeout']:
+            continue
+        # Insert the event into the channel and the reliable stream
         try:
             keys = ["z-channel-stream:%s" % channel]
             args = [time.time(), env.config['event_ttl'], channel]
             args.extend(request.json.events)
             published += env.rd_enqueue_handle[rd_host](keys=keys, args=args)
+            env.rd_fail_times.pop(rd_host, None)
             break
         except (KeyError, ValueError) as e:
             print("Got invalid queue event")
         except redis.RedisError as e:
+            env.rd_fail_times[rd_host] = time.time()
             print("Error contacting redis server %s" % rd_host)
 
     if published != request.json.events:
