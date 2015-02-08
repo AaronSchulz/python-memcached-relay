@@ -214,9 +214,9 @@ def relay_memcache_command(mc_sock, command):
             purge_time = time.time() + command.get('uto', 0)
             command['val'] = command['val'].replace('$UNIXTIME$', '%.6f' % purge_time)
 
-        if cmd == 'set' or cmd == 'add':
-            cmd_buffer = "%s %s %s %s %s\r\n%s\r\n" % (
-                cmd, key, command['flg'], command['ttl'], len(command['val']), command['val'])
+        if cmd == 'set':
+            cmd_buffer = "set %s %s %s %s\r\n%s\r\n" % (
+                key, command['flg'], command['ttl'], len(command['val']), command['val'])
         elif cmd == 'delete':
             cmd_buffer = "delete %s\r\n" % key
         else:
@@ -263,14 +263,6 @@ def relay_redis_command(rd_handle, command):
                 return rd_handle.set(key, command['val'])
             else:
                 return rd_handle.setex(key, command['ttl'], command['val'])
-        elif cmd == 'add':
-            if not rd_handle.exists(key):
-                if command['ttl'] == 0:
-                    return rd_handle.set(key, command['val'])
-                else:
-                    return rd_handle.setex(key, command['ttl'], command['val'])
-            else:
-                return False
         elif cmd == 'delete':
             return rd_handle.delete(key)
         else:
