@@ -79,7 +79,7 @@ def enqueue_command(channel):
     published = 0
     for rd_host in host_candidates:
         try:
-            keys = ["z-stream:%s" % channel]
+            keys = ["z-channel-stream:%s" % channel]
             args = [time.time(), env.config['event_ttl'], channel]
             args.extend(request.json.events)
             published += env.rd_enqueue_handle[rd_host](keys=keys, args=args)

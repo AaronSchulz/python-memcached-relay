@@ -150,7 +150,7 @@ def redis_stream_ping(target, rd_host):
 
 def resync_via_redis_stream(target, rd_host, stop_pos):
     # Prefix the channel to get the stream key
-    key = "z-stream:%s" % env.config['redis_channel']
+    key = "z-channel-stream:%s" % env.config['redis_channel']
 
     print("Applying updates from redis server %s" % rd_host)
 
