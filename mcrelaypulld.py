@@ -123,7 +123,7 @@ def relay_next_command(target, rd_host, last_pos_write):
             print("Cannot relay command; invalid JSON")
             return True
         # Replicate the update to the cache server
-        relay_cache_command(target, command)
+        relay_cache_command(target, command, e_time)
         # Periodically update the position file
         cur_time = time.time()
         if (cur_time - last_pos_write[rd_host]) > env.config['pos_write_delay']:
@@ -176,7 +176,7 @@ def resync_via_redis_stream(target, rd_host, stop_pos):
                 print("Cannot relay command; invalid JSON")
                 continue
             # Replicate the update to the cache server
-            relay_cache_command(target, command)
+            relay_cache_command(target, command, e_time)
             info['pos'] = float(e_time)
         # Update the position after each batch
         print("Updating position to %.6f" % info['pos'])
@@ -188,18 +188,18 @@ def resync_via_redis_stream(target, rd_host, stop_pos):
     print("Done applying updates from redis server %s" % rd_host)
 
 
-def relay_cache_command(target, command):
+def relay_cache_command(target, command, e_time):
     if env.config['cache_type'] == 'memcached':
-        return relay_memcache_command(target, command)
+        return relay_memcache_command(target, command, e_time)
     elif env.config['cache_type'] == 'redis':
-        return relay_redis_command(target, command)
+        return relay_redis_command(target, command, e_time)
     elif env.config['cache_type'] == 'cdn':
-        return relay_cdn_command(target, command)
+        return relay_cdn_command(target, command, e_time)
 
     return None
 
 
-def relay_memcache_command(mc_sock, command):
+def relay_memcache_command(mc_sock, command, e_time):
     try:
         cmd = str(command['cmd'])  # commands are always ASCII
         key = str(command['key'])  # keys are always ASCII
@@ -215,8 +215,16 @@ def relay_memcache_command(mc_sock, command):
             command['val'] = command['val'].replace('$UNIXTIME$', '%.6f' % purge_time)
 
         if cmd == 'set':
-            cmd_buffer = "set %s %s %s %s\r\n%s\r\n" % (
-                key, command['flg'], command['ttl'], len(command['val']), command['val'])
+            is_stale = False
+            if command['ttl'] != 0:
+                command['ttl'] -= int(time.time() - e_time)
+                is_stale = (command['ttl'] <= 0)
+            if is_stale:
+                print("Command 'set' for key %s is stale" % key)
+                cmd_buffer = "delete %s\r\n" % key
+            else:
+                cmd_buffer = "set %s %s %s %s\r\n%s\r\n" % (
+                    key, command['flg'], command['ttl'], len(command['val']), command['val'])
         elif cmd == 'delete':
             cmd_buffer = "delete %s\r\n" % key
         else:
@@ -246,7 +254,7 @@ def relay_memcache_command(mc_sock, command):
     return result
 
 
-def relay_redis_command(rd_handle, command):
+def relay_redis_command(rd_handle, command, e_time):
     try:
         cmd = str(command['cmd'])  # commands are always ASCII
         key = str(command['key'])  # keys are always ASCII
@@ -262,7 +270,12 @@ def relay_redis_command(rd_handle, command):
             if command['ttl'] == 0:
                 return rd_handle.set(key, command['val'])
             else:
-                return rd_handle.setex(key, command['ttl'], command['val'])
+                command['ttl'] -= int(time.time() - e_time)
+                if command['ttl'] <= 0:
+                    print("Command 'set' for key %s is stale" % key)
+                    return rd_handle.delete(key)
+                else:
+                    return rd_handle.setex(key, command['ttl'], command['val'])
         elif cmd == 'delete':
             return rd_handle.delete(key)
         else:
@@ -275,7 +288,7 @@ def relay_redis_command(rd_handle, command):
         raise Exception('RedisCommandError', 'Failed to issue redis command')
 
 
-def relay_cdn_command(http, command):
+def relay_cdn_command(http, command, e_time):
     try:
         cmd = str(command['cmd'])  # HTTP verbs are always ASCII
 
