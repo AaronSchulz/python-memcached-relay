@@ -10,7 +10,7 @@ import httplib2
 
 parser = argparse.ArgumentParser(description='Process cache relay commands from a channel')
 parser.add_argument('--config-file', required=True, help='YAML configuration file')
-args = parser.parse_args()
+script_args = parser.parse_args()
 
 
 class AttrDict(dict):
@@ -27,7 +27,7 @@ env.rd_fail_times = {}  # map of (redis host => UNIX timestamp)
 
 def main():
     print("Loading YAML config...")
-    env.config = load_config(args.config_file)
+    env.config = load_config(script_args.config_file)
     print("Done")
 
     # Connect to the memcached/redis cache server...

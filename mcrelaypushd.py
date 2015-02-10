@@ -10,7 +10,7 @@ import redis
 
 parser = argparse.ArgumentParser(description='Enqueue relay cache commands into redis')
 parser.add_argument('--config-file', required=True, help='YAML configuration file')
-args = parser.parse_args()
+script_args = parser.parse_args()
 
 
 def load_config(config_file):
@@ -26,7 +26,7 @@ def load_config(config_file):
     return config
 
 app = Flask(__name__)
-app.config.update(load_config(args.config_file))
+app.config.update(load_config(script_args.config_file))
 
 enqueue_script = """
 local kEvents = unpack(KEYS)
