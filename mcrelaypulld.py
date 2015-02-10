@@ -8,7 +8,17 @@ import yaml
 import redis
 import httplib2
 
-env = {}  # global state
+parser = argparse.ArgumentParser(description='Process cache relay commands from a channel')
+parser.add_argument('--config-file', required=True, help='YAML configuration file')
+args = parser.parse_args()
+
+
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
+
+env = AttrDict()  # global state
 env.config = {}
 env.rd_handles = {}  # map of (redis host => StrictRedis)
 env.rd_ps_handles = {}  # map of (redis host => RedisPubSub)
@@ -16,10 +26,6 @@ env.rd_fail_times = {}  # map of (redis host => UNIX timestamp)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Process cache relay commands from a channel')
-    parser.add_argument('--config-file', required=True, help='YAML configuration file')
-    args = parser.parse_args()
-
     print("Loading YAML config...")
     env.config = load_config(args.config_file)
     print("Done")
@@ -39,7 +45,7 @@ def main():
             port=env.config['redis_stream_port'],
             password=env.config['redis_password'],
             socket_connect_timeout=env.config['redis_connect_timeout'],
-            socket_timeout=env.config['socket_timeout'])
+            socket_timeout=env.config['redis_timeout'])
         # Create the PubSub object (connection is deferred)
         env.rd_ps_handles[rd_host] = env.rd_handles[rd_host].pubsub()
         # Actually connect and subscribe (connection is on first command)
@@ -119,6 +125,7 @@ def relay_next_command(target, rd_host, last_pos_write):
         try:
             e_time, e_msg = event['data'].split(":", 1)
             command = json.loads(e_msg)
+            e_time = float(e_time)
         except ValueError as e:
             print("Cannot relay command; invalid JSON")
             return True
@@ -127,7 +134,7 @@ def relay_next_command(target, rd_host, last_pos_write):
         # Periodically update the position file
         cur_time = time.time()
         if (cur_time - last_pos_write[rd_host]) > env.config['pos_write_delay']:
-            info = {'pos': float(e_time)}
+            info = {'pos': e_time}
             set_current_position(rd_host, info)
             last_pos_write[rd_host] = cur_time
         return True
@@ -172,12 +179,13 @@ def resync_via_redis_stream(target, rd_host, stop_pos):
             try:
                 e_time, e_msg = event.split(":", 1)
                 command = json.loads(e_msg)
+                e_time = float(e_time)
             except ValueError as e:
                 print("Cannot relay command; invalid JSON")
                 continue
             # Replicate the update to the cache server
             relay_cache_command(target, command, e_time)
-            info['pos'] = float(e_time)
+            info['pos'] = e_time
         # Update the position after each batch
         print("Updating position to %.6f" % info['pos'])
         set_current_position(rd_host, info)
