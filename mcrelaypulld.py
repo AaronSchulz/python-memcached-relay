@@ -238,8 +238,9 @@ def relay_memcache_command(mc_sock, command, e_time):
         else:
             print('Got unrecognized memcached command "%s"' % cmd)
             return None
-    except (KeyError, ValueError) as e:
+    except (KeyError, ValueError, TypeError) as e:
         print('Got incomplete or invalid relay command')
+        print(command)
         return None
 
     # Issue the full command
@@ -289,8 +290,9 @@ def relay_redis_command(rd_handle, command, e_time):
         else:
             print('Got unrecognized redis command "%s"' % cmd)
             return None
-    except (KeyError, ValueError) as e:
+    except (KeyError, ValueError, TypeError) as e:
         print('Got incomplete or invalid relay command')
+        print(command)
         return None
     except redis.RedisError as e:
         raise Exception('RedisCommandError', 'Failed to issue redis command')
