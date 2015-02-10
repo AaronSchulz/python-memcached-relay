@@ -106,4 +106,4 @@ def enqueue_command(channel):
 
 if __name__ == '__main__':
     init_redis()
-    app.run(debug=True)
+    app.run(threaded=True)
